@@ -8,7 +8,7 @@ A desktop file-security application combining **face recognition**, **password a
 
 | Category | Details |
 |---|---|
-| **Face Auth** | OpenCV + face_recognition, liveness detection (EAR blink), multi-user |
+| **Face Auth** | OpenCV + face_recognition, liveness detection (Eye blink), multi-user |
 | **Password Auth** | bcrypt hashing, configurable lockout after failed attempts |
 | **Encryption** | AES-128 via Fernet, PBKDF2-HMAC-SHA256 key derivation, key NEVER stored |
 | **GUI** | PyQt5, dark theme, live camera feed (~30 fps), file browser |
