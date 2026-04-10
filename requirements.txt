@@ -1,9 +1,17 @@
 # AI SecureVault — Python dependencies
 # Install with:  pip install -r requirements.txt
 #
-# Note: face_recognition requires cmake + dlib.
-#   Windows: pip install cmake dlib  (or use pre-built wheel)
-#   Linux:   sudo apt install cmake libboost-all-dev
+# ── IMPORTANT: install these FIRST before anything else ──────────────────────
+# 1. Pin setuptools to avoid build breakage with dlib/face_recognition:
+#       pip install --force-reinstall setuptools==69.5.1
+#
+# 2. Install the pre-built dlib wheel for Windows (Python 3.12):
+#       pip install dlib-19.24.99-cp312-cp312-win_amd64.whl
+#    (place the .whl file in the project directory before running the above)
+#
+#    For Linux: sudo apt install cmake libboost-all-dev libopenblas-dev
+#               then: pip install dlib
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
 PyQt5>=5.15.0
@@ -12,7 +20,7 @@ PyQt5>=5.15.0
 opencv-python>=4.8.0
 # For face_recognition on Linux/Mac:
 face_recognition>=1.3.0
-dlib>=19.24.0            # pulled in by face_recognition; may need pre-built wheel
+dlib>=19.24.0            # pulled in by face_recognition; use pre-built wheel on Windows
 
 # ── Encryption ────────────────────────────────────────────────────────────────
 cryptography>=41.0.0
@@ -21,8 +29,11 @@ cryptography>=41.0.0
 bcrypt>=4.0.0
 
 # ── Numerics ─────────────────────────────────────────────────────────────────
-numpy>=1.24.0
+numpy>=1.24.0,<2.0.0
 scipy>=1.11.0            # used by EAR liveness detection
+
+# ── Build tooling (pin BEFORE installing dlib/face_recognition) ──────────────
+setuptools==69.5.1
 
 # ── Packaging / PyInstaller ───────────────────────────────────────────────────
 pyinstaller>=5.13.0      # only needed for building .exe

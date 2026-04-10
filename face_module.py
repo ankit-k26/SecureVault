@@ -163,31 +163,24 @@ class FaceManager:
     @staticmethod
     def _safe_rgb(bgr: np.ndarray, max_width: int = 640) -> np.ndarray:
         """
-        Convert a BGR OpenCV frame to an RGB numpy array that is guaranteed
-        to be accepted by dlib's HOG face detector.
-
-        Two things are required:
-          1. The array must be C-contiguous uint8 with shape (H, W, 3).
-          2. The width must be ≤ max_width — dlib 19.24 on Windows has an
-             integer-overflow bug that raises "Unsupported image type" for
-             images wider than ~1000 px regardless of dtype.
-
-        We achieve both by routing through PIL, which always produces a fresh,
-        correctly-strided allocation.
+        Ensures the image is in a format dlib/face_recognition won't reject.
         """
-        from PIL import Image as _PILImage
-
-        # Resize if too wide
+        # 1. Resize if too wide (dlib integer overflow protection)
         h, w = bgr.shape[:2]
         if w > max_width:
             new_w = max_width
             new_h = int(h * max_width / w)
             bgr = cv2.resize(bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-        # BGR → RGB via PIL (guarantees fresh allocation + correct strides)
-        rgb_pil = _PILImage.fromarray(bgr[:, :, ::-1])          # flip channels
-        rgb = np.array(rgb_pil.convert("RGB"), dtype=np.uint8)  # fresh C-array
-        return rgb
+        # 2. Convert BGR to RGB
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+        # 3. CRITICAL: Force 8-bit unsigned integers
+        rgb = rgb.astype(np.uint8)
+
+        # 4. CRITICAL: Force C-Contiguous memory layout
+        # Dlib often crashes if the memory is 'strided' or 'fortran-style'
+        return np.ascontiguousarray(rgb)
 
     def register_face_from_images(self, username: str, image_paths: list[str]) -> bool:
         """
@@ -222,7 +215,7 @@ class FaceManager:
 
             # ── 5. Encode ─────────────────────────────────────────────────────
             found = face_recognition.face_encodings(
-                rgb, known_face_locations=locations, model=FACE_MODEL
+                rgb, known_face_locations=locations, num_jitters=2
             )
             if not found:
                 logger.warning("Could not encode face in %s — skipping.", path)
@@ -246,7 +239,7 @@ class FaceManager:
         if not locations:
             logger.warning("register_face_from_frame: no face in frame.")
             return False
-        encodings = face_recognition.face_encodings(rgb, known_face_locations=locations, model=FACE_MODEL)
+        encodings = face_recognition.face_encodings(rgb, known_face_locations=locations, num_jitters=2)
         if not encodings:
             logger.warning("register_face_from_frame: could not encode face.")
             return False
@@ -278,32 +271,23 @@ class FaceManager:
             logger.debug("No stored face records — recognition skipped.")
             return result
 
-        # Resize for speed + dlib HOG compatibility (max 640px wide)
-        h_fr, w_fr = bgr_frame.shape[:2]
-        if w_fr > 640:
-            scale = 640 / w_fr
-            small = cv2.resize(bgr_frame, (640, int(h_fr * scale)), interpolation=cv2.INTER_AREA)
-        else:
-            scale = 0.5
-            small = cv2.resize(bgr_frame, (0, 0), fx=scale, fy=scale)
-        rgb_small = self._safe_rgb(small, max_width=small.shape[1])
+        # ── Prepare ONE consistent image for both detection AND encoding ──────
+        # detect + encode MUST use the exact same image so that the returned
+        # locations are valid coordinates for the encoding call.
+        # We cap at 640px wide: fast for HOG, safe for dlib.
+        rgb_work = self._safe_rgb(bgr_frame, max_width=640)
 
-        locations = face_recognition.face_locations(rgb_small, model=FACE_MODEL)
+        locations = face_recognition.face_locations(rgb_work, model=FACE_MODEL)
         if not locations:
             return result   # face_found stays False
 
         result.face_found = True
 
-        # Scale locations back to original frame size
-        locations_full = [
-            (int(t / scale), int(r / scale), int(b / scale), int(l / scale))
-            for (t, r, b, l) in locations
-        ]
-
+        # locations are already in rgb_work coordinates — pass them directly
         encodings = face_recognition.face_encodings(
-            self._safe_rgb(bgr_frame),
-            locations_full,
-            model=FACE_MODEL,
+            rgb_work,
+            known_face_locations=locations,
+            num_jitters=1,
         )
 
         known_encs  = [rec.encoding for rec in self._store.records]
@@ -326,9 +310,10 @@ class FaceManager:
         result.matched    = best_match_name != "unknown"
         result.username   = best_match_name
 
-        # Liveness check using facial landmarks + EAR
+        # Liveness check — pass rgb_work so _check_liveness uses the same
+        # image+coordinate space as the detection step above.
         if LIVENESS_REQUIRED:
-            result.liveness_ok = self._check_liveness(bgr_frame, locations_full)
+            result.liveness_ok = self._check_liveness_rgb(rgb_work, locations)
         else:
             result.liveness_ok = True
 
@@ -339,16 +324,22 @@ class FaceManager:
     def _check_liveness(
         self, bgr_frame: np.ndarray, locations: list[tuple]
     ) -> bool:
+        """Legacy shim — converts BGR→RGB then delegates."""
+        return self._check_liveness_rgb(self._safe_rgb(bgr_frame, max_width=640), locations)
+
+    def _check_liveness_rgb(
+        self, rgb_frame: np.ndarray, locations: list[tuple]
+    ) -> bool:
         """
         Detect a blink to verify the subject is live (not a photo).
-        Returns True once a blink has been observed in the current session.
+        Accepts an already-converted RGB image so locations are in the same
+        coordinate space.  Returns True once a blink has been observed.
         If already confirmed, remains True.
         """
         if self._blink_detected:
             return True
 
-        rgb = self._safe_rgb(bgr_frame)
-        landmarks_list = face_recognition.face_landmarks(rgb, face_locations=locations)
+        landmarks_list = face_recognition.face_landmarks(rgb_frame, face_locations=locations)
 
         for landmarks in landmarks_list:
             left_eye  = np.array(landmarks.get("left_eye",  []))
@@ -420,15 +411,17 @@ class FaceManager:
         frame = bgr_frame.copy()
 
         if locations is None:
-            scale = 0.5
-            small = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
-            rgb_s = FaceManager._safe_rgb(small, max_width=small.shape[1])
+            # Re-detect on a consistently-sized image and scale coords back up
+            h, w = frame.shape[:2]
+            rgb_work = FaceManager._safe_rgb(frame, max_width=640)
+            rw = rgb_work.shape[1]
+            scale = rw / w  # ≤ 1.0
             try:
-                raw = face_recognition.face_locations(rgb_s, model=FACE_MODEL)
+                raw = face_recognition.face_locations(rgb_work, model=FACE_MODEL)
             except Exception:
                 raw = []
             locations = [
-                (int(t/scale), int(r/scale), int(b/scale), int(l/scale))
+                (int(t / scale), int(r / scale), int(b / scale), int(l / scale))
                 for (t, r, b, l) in raw
             ]
 

@@ -203,7 +203,7 @@ class CameraWorker(QThread):
             if result is not None:
                 from face_module import FaceManager
                 try:
-                    annotated = FaceManager.annotate_frame(frame, result, locations=[])
+                    annotated = FaceManager.annotate_frame(frame, result, locations=None)
                 except Exception:
                     annotated = frame
             else:
@@ -393,6 +393,10 @@ class LoginScreen(QWidget):
     def _on_auth_result(self, result, state):
         from face_module import RecognitionResult
 
+        # Ignore any stale camera signals once we've moved to password mode
+        if self._pwd_mode:
+            return
+
         if state == AuthState.AUTHENTICATED:
             self._face_status.setText(f"✅  Welcome, {result.username}!")
             self._face_status.setStyleSheet("color: #00e676; font-size: 14px; font-weight: bold;")
@@ -426,10 +430,15 @@ class LoginScreen(QWidget):
 
     def _show_password_mode(self):
         self._pwd_mode = True
+        # Stop the camera worker — we no longer need face scanning and its
+        # stale signals must not re-disable the Unlock button.
+        self.stop()
         self._pwd_frame.show()
         self._auth_title.setText("Password Login")
         self._auth_hint.setText("Face recognition failed.\nEnter your credentials to unlock.")
         self._switch_btn.setText("Try Face Again")
+        # Ensure Unlock button is always enabled when the form first appears
+        self._login_btn.setEnabled(True)
 
     def _toggle_mode(self):
         if self._pwd_mode:
@@ -915,16 +924,13 @@ class SettingsScreen(QWidget):
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord(" ") and not done:
-                # Resize to max 640px wide — dlib HOG detector crashes on wide images
-                h_f, w_f = frame.shape[:2]
-                if w_f > 640:
-                    frame_save = cv2.resize(frame, (640, int(h_f * 640 / w_f)),
-                                            interpolation=cv2.INTER_AREA)
-                else:
-                    frame_save = frame.copy()
+                # Use .copy() to ensure a fresh memory buffer for the save operation
+                frame_to_save = frame.copy()
+                
                 tmp = os.path.join(tempfile.gettempdir(), f"enrol_{uuid.uuid4().hex}.jpg")
-                ok = cv2.imwrite(tmp, frame_save)
-                if ok and os.path.exists(tmp) and os.path.getsize(tmp) > 1024:
+                success = cv2.imwrite(tmp, frame_to_save)
+                
+                if success:
                     captured_paths.append(tmp)
                     frames_captured += 1
                 else:
