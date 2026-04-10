@@ -900,20 +900,40 @@ class SettingsScreen(QWidget):
 
         while True:
             ret, frame = cap.read()
-            if not ret:
-                break
-            cv2.putText(frame, "SPACE=capture  Q=done", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(frame, f"Captured: {frames_captured}", (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            if not ret or frame is None:
+                continue
+
+            # Reject non-standard frames (wrong dtype or channel count)
+            if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3:
+                continue
+
+            done = frames_captured >= 10
+            hint = "(max reached, press Q)" if done else "SPACE=capture  Q=done"
+            cv2.putText(frame, f"Captured: {frames_captured}/10  {hint}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             cv2.imshow("Enrol Face — SPACE to capture, Q to finish", frame)
             key = cv2.waitKey(1) & 0xFF
-            if key == ord(" "):
+
+            if key == ord(" ") and not done:
+                # Resize to max 640px wide — dlib HOG detector crashes on wide images
+                h_f, w_f = frame.shape[:2]
+                if w_f > 640:
+                    frame_save = cv2.resize(frame, (640, int(h_f * 640 / w_f)),
+                                            interpolation=cv2.INTER_AREA)
+                else:
+                    frame_save = frame.copy()
                 tmp = os.path.join(tempfile.gettempdir(), f"enrol_{uuid.uuid4().hex}.jpg")
-                cv2.imwrite(tmp, frame)
-                captured_paths.append(tmp)
-                frames_captured += 1
-            elif key == ord("q") or frames_captured >= 10:
+                ok = cv2.imwrite(tmp, frame_save)
+                if ok and os.path.exists(tmp) and os.path.getsize(tmp) > 1024:
+                    captured_paths.append(tmp)
+                    frames_captured += 1
+                else:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+
+            if key == ord("q") or done:
                 break
 
         cap.release()

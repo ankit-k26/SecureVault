@@ -160,6 +160,35 @@ class FaceManager:
 
     # ── Registration ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _safe_rgb(bgr: np.ndarray, max_width: int = 640) -> np.ndarray:
+        """
+        Convert a BGR OpenCV frame to an RGB numpy array that is guaranteed
+        to be accepted by dlib's HOG face detector.
+
+        Two things are required:
+          1. The array must be C-contiguous uint8 with shape (H, W, 3).
+          2. The width must be ≤ max_width — dlib 19.24 on Windows has an
+             integer-overflow bug that raises "Unsupported image type" for
+             images wider than ~1000 px regardless of dtype.
+
+        We achieve both by routing through PIL, which always produces a fresh,
+        correctly-strided allocation.
+        """
+        from PIL import Image as _PILImage
+
+        # Resize if too wide
+        h, w = bgr.shape[:2]
+        if w > max_width:
+            new_w = max_width
+            new_h = int(h * max_width / w)
+            bgr = cv2.resize(bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        # BGR → RGB via PIL (guarantees fresh allocation + correct strides)
+        rgb_pil = _PILImage.fromarray(bgr[:, :, ::-1])          # flip channels
+        rgb = np.array(rgb_pil.convert("RGB"), dtype=np.uint8)  # fresh C-array
+        return rgb
+
     def register_face_from_images(self, username: str, image_paths: list[str]) -> bool:
         """
         Compute the mean encoding from one or more training images and store it.
@@ -167,12 +196,40 @@ class FaceManager:
         """
         encodings: list[np.ndarray] = []
         for path in image_paths:
-            img = face_recognition.load_image_file(path)
-            found = face_recognition.face_encodings(img, model=FACE_MODEL)
-            if not found:
+            # ── 1. Validate file ──────────────────────────────────────────────
+            if not os.path.exists(path):
+                logger.warning("File not found: %s — skipping.", path)
+                continue
+            if os.path.getsize(path) < 1024:
+                logger.warning("File too small (corrupt?): %s — skipping.", path)
+                continue
+
+            # ── 2. Load with OpenCV ───────────────────────────────────────────
+            bgr = cv2.imread(path)
+            if bgr is None:
+                logger.warning("cv2.imread failed for %s — skipping.", path)
+                continue
+
+            # ── 3. Convert to dlib-safe RGB (resize + PIL round-trip) ─────────
+            rgb = self._safe_rgb(bgr)
+            logger.debug("Processing %s  final_shape=%s", os.path.basename(path), rgb.shape)
+
+            # ── 4. Detect face locations ──────────────────────────────────────
+            locations = face_recognition.face_locations(rgb, model=FACE_MODEL)
+            if not locations:
                 logger.warning("No face detected in %s — skipping.", path)
                 continue
-            encodings.append(found[0])   # use the first detected face
+
+            # ── 5. Encode ─────────────────────────────────────────────────────
+            found = face_recognition.face_encodings(
+                rgb, known_face_locations=locations, model=FACE_MODEL
+            )
+            if not found:
+                logger.warning("Could not encode face in %s — skipping.", path)
+                continue
+
+            encodings.append(found[0])
+            logger.debug("Encoded face from %s", os.path.basename(path))
 
         if not encodings:
             logger.error("No valid faces found for user '%s'.", username)
@@ -184,14 +241,14 @@ class FaceManager:
         return True
 
     def register_face_from_frame(self, username: str, bgr_frame: np.ndarray) -> bool:
-        """
-        Register a face directly from a single OpenCV BGR frame (used in the GUI
-        enrolment wizard).
-        """
-        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-        encodings = face_recognition.face_encodings(rgb, model=FACE_MODEL)
-        if not encodings:
+        rgb = self._safe_rgb(bgr_frame)
+        locations = face_recognition.face_locations(rgb, model=FACE_MODEL)
+        if not locations:
             logger.warning("register_face_from_frame: no face in frame.")
+            return False
+        encodings = face_recognition.face_encodings(rgb, known_face_locations=locations, model=FACE_MODEL)
+        if not encodings:
+            logger.warning("register_face_from_frame: could not encode face.")
             return False
         self._store.add(FaceRecord(username=username, encoding=encodings[0]))
         logger.info("Registered face for '%s' from live frame.", username)
@@ -221,10 +278,15 @@ class FaceManager:
             logger.debug("No stored face records — recognition skipped.")
             return result
 
-        # Resize for speed, run face detection on small frame, scale back
-        scale = 0.5
-        small = cv2.resize(bgr_frame, (0, 0), fx=scale, fy=scale)
-        rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        # Resize for speed + dlib HOG compatibility (max 640px wide)
+        h_fr, w_fr = bgr_frame.shape[:2]
+        if w_fr > 640:
+            scale = 640 / w_fr
+            small = cv2.resize(bgr_frame, (640, int(h_fr * scale)), interpolation=cv2.INTER_AREA)
+        else:
+            scale = 0.5
+            small = cv2.resize(bgr_frame, (0, 0), fx=scale, fy=scale)
+        rgb_small = self._safe_rgb(small, max_width=small.shape[1])
 
         locations = face_recognition.face_locations(rgb_small, model=FACE_MODEL)
         if not locations:
@@ -239,7 +301,7 @@ class FaceManager:
         ]
 
         encodings = face_recognition.face_encodings(
-            cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB),
+            self._safe_rgb(bgr_frame),
             locations_full,
             model=FACE_MODEL,
         )
@@ -285,7 +347,7 @@ class FaceManager:
         if self._blink_detected:
             return True
 
-        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        rgb = self._safe_rgb(bgr_frame)
         landmarks_list = face_recognition.face_landmarks(rgb, face_locations=locations)
 
         for landmarks in landmarks_list:
@@ -360,8 +422,11 @@ class FaceManager:
         if locations is None:
             scale = 0.5
             small = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
-            rgb_s = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-            raw   = face_recognition.face_locations(rgb_s, model=FACE_MODEL)
+            rgb_s = FaceManager._safe_rgb(small, max_width=small.shape[1])
+            try:
+                raw = face_recognition.face_locations(rgb_s, model=FACE_MODEL)
+            except Exception:
+                raw = []
             locations = [
                 (int(t/scale), int(r/scale), int(b/scale), int(l/scale))
                 for (t, r, b, l) in raw
