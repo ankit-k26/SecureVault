@@ -87,6 +87,23 @@ On **first launch** you will be prompted to create an admin account. After loggi
 
 ---
 
+## Libraries Used
+
+AI SecureVault leverages several high-performance libraries to handle security, computer vision, and interface management:
+
+| Library | Role in Project |
+| :--- | :--- |
+| **`face_recognition`** | The core engine for facial identity verification. Built on `dlib`, it handles face detection and generates 128-dimensional face embeddings. |
+| **`opencv-python`** (`cv2`) | Manages real-time video capture, image processing (BGR to RGB conversion), and frame annotation for the GUI. |
+| **`PyQt5`** | The framework for the desktop application's GUI, providing the multi-screen navigation and dark theme. |
+| **`cryptography`** | Powers the `VaultManager` using **Fernet** (AES-128-CBC) for secure, authenticated file encryption. |
+| **`bcrypt`** | [cite_start]Handles secure password hashing with salt, providing a robust fallback authentication layer[cite: 1]. |
+| **`numpy`** | [cite_start]Essential for numerical operations, including calculating mean encodings and managing image arrays[cite: 1]. |
+| **`sqlite3`** | [cite_start]Manages the local database for user records, authentication events, and intruder metadata[cite: 3]. |
+| **`scipy`** | Used for EAR (Eye Aspect Ratio) calculations via `scipy.spatial.distance` to perform liveness detection. |
+
+---
+
 ## Face Enrolment Tips
 
 Good enrolment quality is the single biggest factor in recognition accuracy.
