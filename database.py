@@ -176,3 +176,36 @@ def update_password_hash(username: str, new_hash: str) -> None:
 def deactivate_user(username: str) -> None:
     with _get_conn() as conn:
         conn.execute("UPDATE users SET is_active=0 WHERE username=?", (username,))
+
+def delete_intruder_log(log_id: int) -> bool:
+    """Delete a single intruder record by ID. Returns True if a row was deleted."""
+    with _get_conn() as conn:
+        cur = conn.execute("DELETE FROM intruder_logs WHERE id=?", (log_id,))
+        return cur.rowcount > 0
+
+
+def clear_all_intruder_logs() -> int:
+    """
+    Delete ALL intruder records from the DB and remove their image files from disk.
+    Returns the number of records deleted.
+    """
+    import os
+    rows = get_intruder_logs(limit=100_000)   # fetch all first to get file paths
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM intruder_logs")
+    
+    deleted_files = 0
+    for row in rows:
+        path = row.get("image_path", "")
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+                deleted_files += 1
+            except OSError as e:
+                get_logger("db").warning("Could not remove intruder image %s: %s", path, e)
+
+    get_logger("db").info(
+        "Cleared %d intruder DB records, removed %d image files.",
+        len(rows), deleted_files,
+    )
+    return len(rows)

@@ -45,7 +45,7 @@ from config import (
     INTRUDER_DIR,
 )
 from auth import AuthController, AuthState, get_controller
-from database import get_auth_events, get_intruder_logs, list_users
+from database import get_auth_events, get_intruder_logs, list_users, clear_all_intruder_logs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -704,9 +704,16 @@ class IntruderLogsScreen(QWidget):
         title.setObjectName("title")
         hdr.addWidget(title)
         hdr.addStretch()
+
         refresh_btn = QPushButton("🔄  Refresh")
         refresh_btn.clicked.connect(self.refresh)
         hdr.addWidget(refresh_btn)
+
+        clear_btn = QPushButton("🗑️  Clear All")
+        clear_btn.setObjectName("danger")
+        clear_btn.clicked.connect(self._clear_all)
+        hdr.addWidget(clear_btn)
+
         root.addLayout(hdr)
         root.addWidget(_hline())
 
@@ -769,6 +776,20 @@ class IntruderLogsScreen(QWidget):
 
             row, col = divmod(idx, 4)
             self._grid.addWidget(card, row, col)
+
+    def _clear_all(self):
+        reply = QMessageBox.question(
+            self, "Clear All Intruder Data",
+            "Permanently delete all intruder images and records?\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            count = clear_all_intruder_logs()
+            QMessageBox.information(
+                self, "Cleared",
+                f"Deleted {count} intruder record(s) and their images."
+            )
+            self.refresh()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -926,10 +947,10 @@ class SettingsScreen(QWidget):
             if key == ord(" ") and not done:
                 # Use .copy() to ensure a fresh memory buffer for the save operation
                 frame_to_save = frame.copy()
-                
+
                 tmp = os.path.join(tempfile.gettempdir(), f"enrol_{uuid.uuid4().hex}.jpg")
                 success = cv2.imwrite(tmp, frame_to_save)
-                
+
                 if success:
                     captured_paths.append(tmp)
                     frames_captured += 1
