@@ -1,0 +1,28 @@
+# AI SecureVault — Python dependencies
+# Install with:  pip install -r requirements.txt
+#
+# Note: face_recognition requires cmake + dlib.
+#   Windows: pip install cmake dlib  (or use pre-built wheel)
+#   Linux:   sudo apt install cmake libboost-all-dev
+
+# ── GUI ───────────────────────────────────────────────────────────────────────
+PyQt5>=5.15.0
+
+# ── Computer vision ───────────────────────────────────────────────────────────
+opencv-python>=4.8.0
+# For face_recognition on Linux/Mac:
+face_recognition>=1.3.0
+dlib>=19.24.0            # pulled in by face_recognition; may need pre-built wheel
+
+# ── Encryption ────────────────────────────────────────────────────────────────
+cryptography>=41.0.0
+
+# ── Password hashing ─────────────────────────────────────────────────────────
+bcrypt>=4.0.0
+
+# ── Numerics ─────────────────────────────────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.11.0            # used by EAR liveness detection
+
+# ── Packaging / PyInstaller ───────────────────────────────────────────────────
+pyinstaller>=5.13.0      # only needed for building .exe
