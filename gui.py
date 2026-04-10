@@ -178,7 +178,14 @@ class CameraWorker(QThread):
 
         while self._running:
             ret, frame = cap.read()
-            if not ret:
+            if not ret or frame is None:
+                self.msleep(30)
+                continue
+
+            # ── Guard: ensure frame is a valid 8-bit BGR image ───────────────
+            if frame.dtype != np.uint8:
+                frame = frame.astype(np.uint8)
+            if len(frame.shape) != 3 or frame.shape[2] != 3:
                 self.msleep(30)
                 continue
 
@@ -192,10 +199,13 @@ class CameraWorker(QThread):
                 from face_module import RecognitionResult
                 result, state = self._ctrl.process_face_frame(frame)
 
-            # Annotate
+            # Annotate — pass a uint8 copy, skip re-detect by passing locations=[]
             if result is not None:
                 from face_module import FaceManager
-                annotated = FaceManager.annotate_frame(frame, result)
+                try:
+                    annotated = FaceManager.annotate_frame(frame, result, locations=[])
+                except Exception:
+                    annotated = frame
             else:
                 annotated = frame
 

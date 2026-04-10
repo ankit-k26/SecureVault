@@ -456,7 +456,7 @@ if __name__ == "__main__":
             if result.face_found:
                 mgr.capture_intruder(frame, confidence=result.confidence, notes="CLI test")
 
-        annotated = FaceManager.annotate_frame(frame, result)
+        annotated = FaceManager.annotate_frame(frame.copy(), result)
         cv2.imshow("AI SecureVault — Face Recognition", annotated)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
