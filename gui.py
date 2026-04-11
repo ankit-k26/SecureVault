@@ -42,7 +42,7 @@ from config import (
     APP_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT,
     THEME_PRIMARY, THEME_ACCENT, THEME_SURFACE, THEME_TEXT,
     CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, FRAME_SKIP,
-    INTRUDER_DIR,
+    INTRUDER_DIR,CAMERA_FPS
 )
 from auth import AuthController, AuthState, get_controller
 from database import get_auth_events, get_intruder_logs, list_users, clear_all_intruder_logs
@@ -175,6 +175,7 @@ class CameraWorker(QThread):
         cap = cv2.VideoCapture(CAMERA_INDEX)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAMERA_WIDTH)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+        cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
 
         while self._running:
             ret, frame = cap.read()
@@ -687,12 +688,153 @@ class FilesBrowserScreen(QWidget):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Intruder Image Viewer — full-size popup dialog
+# ─────────────────────────────────────────────────────────────────────────────
+
+class IntruderImageViewer(QWidget):
+    """
+    Full-size image viewer dialog for a single intruder capture.
+    Opens as a standalone window; multiple can be open at once.
+    """
+
+    def __init__(self, image_path: str, timestamp: str, confidence: float | None, parent=None):
+        super().__init__(parent, Qt.Window)
+        self._path       = image_path
+        self._timestamp  = timestamp
+        self._confidence = confidence
+        self._original_pixmap: QPixmap | None = None
+        self.setWindowTitle(f"Intruder — {timestamp[:16]}")
+        self.setMinimumSize(520, 480)
+        self.setStyleSheet(f"""
+            QWidget  {{ background-color: {THEME_PRIMARY}; color: {THEME_TEXT}; }}
+            QLabel   {{ color: {THEME_TEXT}; }}
+            QPushButton {{
+                background-color: {THEME_SURFACE};
+                color: {THEME_TEXT};
+                border: 1px solid #2a2a4a;
+                border-radius: 6px;
+                padding: 7px 18px;
+                font-size: 13px;
+            }}
+            QPushButton:hover {{ background-color: {THEME_ACCENT}; border-color: {THEME_ACCENT}; }}
+        """)
+        self._build_ui()
+        self._load_image()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+
+        # ── Image display ─────────────────────────────────────────────────────
+        self._img_label = QLabel()
+        self._img_label.setAlignment(Qt.AlignCenter)
+        self._img_label.setStyleSheet("background:#0a0a1a; border-radius:6px;")
+        self._img_label.setMinimumSize(480, 360)
+        self._img_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        root.addWidget(self._img_label)
+
+        # ── Metadata row ──────────────────────────────────────────────────────
+        meta_row = QHBoxLayout()
+
+        ts_label = QLabel(f"🕐  {self._timestamp[:19].replace('T', '  ')}")
+        ts_label.setStyleSheet("font-size: 13px; color: #aaaacc;")
+        meta_row.addWidget(ts_label)
+
+        meta_row.addStretch()
+
+        if self._confidence is not None:
+            conf_label = QLabel(f"Confidence: {self._confidence:.1%}")
+            conf_label.setStyleSheet("font-size: 13px; color: #aaaacc;")
+            meta_row.addWidget(conf_label)
+
+        root.addLayout(meta_row)
+
+        path_label = QLabel(f"📂  {self._path}")
+        path_label.setStyleSheet("font-size: 11px; color: #666688;")
+        path_label.setWordWrap(True)
+        root.addWidget(path_label)
+
+        root.addWidget(_hline())
+
+        # ── Action buttons ────────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+
+        open_btn = QPushButton("📂  Open in File Manager")
+        open_btn.clicked.connect(self._open_in_file_manager)
+        btn_row.addWidget(open_btn)
+
+        save_btn = QPushButton("💾  Save Copy As…")
+        save_btn.clicked.connect(self._save_copy)
+        btn_row.addWidget(save_btn)
+
+        btn_row.addStretch()
+
+        close_btn = QPushButton("✖  Close")
+        close_btn.clicked.connect(self.close)
+        btn_row.addWidget(close_btn)
+
+        root.addLayout(btn_row)
+
+    def _load_image(self):
+        if os.path.exists(self._path):
+            self._original_pixmap = QPixmap(self._path)
+            self._fit_image()
+        else:
+            self._img_label.setText("⚠️  Image file not found on disk.")
+
+    def _fit_image(self):
+        if self._original_pixmap and not self._original_pixmap.isNull():
+            scaled = self._original_pixmap.scaled(
+                self._img_label.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            self._img_label.setPixmap(scaled)
+
+    def resizeEvent(self, event):
+        """Re-scale image whenever the window is resized."""
+        super().resizeEvent(event)
+        self._fit_image()
+
+    def _open_in_file_manager(self):
+        import subprocess, platform
+        folder = os.path.dirname(self._path)
+        try:
+            if platform.system() == "Windows":
+                # /select highlights the specific file in Explorer
+                subprocess.Popen(["explorer", "/select,", self._path])
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", "-R", self._path])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as exc:
+            QMessageBox.warning(self, "Error", f"Could not open file manager:\n{exc}")
+
+    def _save_copy(self):
+        if not self._original_pixmap or self._original_pixmap.isNull():
+            QMessageBox.warning(self, "No Image", "No image loaded to save.")
+            return
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Save Intruder Image",
+            os.path.basename(self._path),
+            "Images (*.jpg *.jpeg *.png *.bmp)",
+        )
+        if dest:
+            if self._original_pixmap.save(dest):
+                QMessageBox.information(self, "Saved", f"Image saved to:\n{dest}")
+            else:
+                QMessageBox.critical(self, "Error", "Failed to save the image.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Screen 4 — Intruder Logs
 # ─────────────────────────────────────────────────────────────────────────────
 
 class IntruderLogsScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._viewers: list[IntruderImageViewer] = []   # keep refs alive
         self._build_ui()
 
     def _build_ui(self):
@@ -732,6 +874,11 @@ class IntruderLogsScreen(QWidget):
         root.addWidget(self._count_label)
 
     def refresh(self):
+        # Close any open viewer windows
+        for v in self._viewers:
+            v.close()
+        self._viewers.clear()
+
         # Clear grid
         while self._grid.count():
             item = self._grid.takeAt(0)
@@ -745,10 +892,16 @@ class IntruderLogsScreen(QWidget):
             card = _card()
             card.setMaximumWidth(200)
 
+            # ── Thumbnail (clickable) ─────────────────────────────────────────
             img_label = QLabel()
             img_label.setFixedSize(170, 128)
-            img_label.setStyleSheet("background:#0a0a1a; border-radius:4px;")
+            img_label.setStyleSheet(
+                "background:#0a0a1a; border-radius:4px;"
+                "border: 2px solid transparent;"
+            )
             img_label.setAlignment(Qt.AlignCenter)
+            img_label.setCursor(Qt.PointingHandCursor)
+            img_label.setToolTip("Double-click to open full-size")
 
             path = log.get("image_path", "")
             if os.path.exists(path):
@@ -759,23 +912,52 @@ class IntruderLogsScreen(QWidget):
             else:
                 img_label.setText("Image\nnot found")
 
+            # Capture loop variables for the lambda
+            _path = path
+            _ts   = log.get("timestamp", "")
+            _conf = log.get("confidence")
+
+            # Double-click on thumbnail opens viewer
+            img_label.mouseDoubleClickEvent = lambda _e, p=_path, t=_ts, c=_conf: (
+                self._open_viewer(p, t, c)
+            )
+
             card.layout().addWidget(img_label)
 
-            ts = log.get("timestamp", "")
-            ts_label = QLabel(ts[:16])
+            ts_label = QLabel(_ts[:16])
             ts_label.setObjectName("subtitle")
             ts_label.setAlignment(Qt.AlignCenter)
             card.layout().addWidget(ts_label)
 
-            conf = log.get("confidence")
-            if conf is not None:
-                conf_label = QLabel(f"Conf: {conf:.1%}")
+            if _conf is not None:
+                conf_label = QLabel(f"Conf: {_conf:.1%}")
                 conf_label.setObjectName("subtitle")
                 conf_label.setAlignment(Qt.AlignCenter)
                 card.layout().addWidget(conf_label)
 
+            # ── Open button ───────────────────────────────────────────────────
+            open_btn = QPushButton("🔍  Open")
+            open_btn.setToolTip("Open full-size image viewer")
+            open_btn.clicked.connect(
+                lambda _checked, p=_path, t=_ts, c=_conf: self._open_viewer(p, t, c)
+            )
+            card.layout().addWidget(open_btn)
+
             row, col = divmod(idx, 4)
             self._grid.addWidget(card, row, col)
+
+    def _open_viewer(self, path: str, timestamp: str, confidence: float | None):
+        """Open a full-size viewer window for the given intruder image."""
+        if not path or not os.path.exists(path):
+            QMessageBox.warning(self, "Not Found", f"Image file not found:\n{path}")
+            return
+        viewer = IntruderImageViewer(path, timestamp, confidence, parent=None)
+        self._viewers.append(viewer)
+        # Remove from list when the viewer is closed so we don't accumulate refs
+        viewer.destroyed.connect(lambda: self._viewers.remove(viewer) if viewer in self._viewers else None)
+        viewer.show()
+        viewer.raise_()
+        viewer.activateWindow()
 
     def _clear_all(self):
         reply = QMessageBox.question(

@@ -24,10 +24,10 @@ LIVENESS_REQUIRED       = True   # Require liveness check before granting access
 
 # ── Camera ────────────────────────────────────────────────────────────────────
 CAMERA_INDEX      = 0
-CAMERA_WIDTH      = 640
-CAMERA_HEIGHT     = 480
+CAMERA_WIDTH      = 1280
+CAMERA_HEIGHT     = 720
 CAMERA_FPS        = 30
-FRAME_SKIP        = 2   # Process every Nth frame (reduces CPU load)
+FRAME_SKIP        = 1   # Process every Nth frame (reduces CPU load)
 
 # ── Authentication ────────────────────────────────────────────────────────────
 MAX_FACE_ATTEMPTS     = 3    # Failed attempts before fallback to password
@@ -43,8 +43,8 @@ SESSION_KEY_TTL_SEC = 3600     # Key stays in memory max 1 hour
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
 APP_TITLE       = "AI SecureVault"
-WINDOW_WIDTH    = 960
-WINDOW_HEIGHT   = 680
+WINDOW_WIDTH    = 1000
+WINDOW_HEIGHT   = 800
 THEME_PRIMARY   = "#1a1a2e"
 THEME_ACCENT    = "#e94560"
 THEME_SURFACE   = "#16213e"
