@@ -46,7 +46,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="AI_SecureVault",
+    name="SecureVault",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
