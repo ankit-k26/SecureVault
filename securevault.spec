@@ -63,5 +63,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="AI_SecureVault",
+    name="SecureVault",
 )
